@@ -7,6 +7,8 @@
 #include "spinlock.h"
 #include "proc.h"
 
+#include "sysinfo.h"
+
 uint64
 sys_exit(void)
 {
@@ -94,4 +96,36 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// 当前进程的系统调用跟踪掩码
+uint64
+sys_trace(void)
+{
+  int mask;
+
+  if(argint(0, &mask) < 0)
+    return -1;
+
+  myproc()->tracemask = mask;   // 设置调用进程的 tracemask 掩码 mask
+  return 0;
+}
+
+// 收集系统信息
+uint64
+sys_sysinfo(void){
+  uint64 dstaddr;
+  // 获取用户提供的 buffer 地址
+  if(argaddr(0,&dstaddr) < 0)
+    return -1;
+
+  struct sysinfo info;
+  kfreebytes(&info.freemem);  // 获取空间内存
+  kprocnum(&info.nproc);  // 获取进程数量
+
+  // 将内核空间中的 info 数据复制到用户空间的 dstaddr 地址
+  if(copyout(myproc()->pagetable, dstaddr, (char*)&info,sizeof(info)) < 0)
+    return -1;
+  
+  return 0;
 }

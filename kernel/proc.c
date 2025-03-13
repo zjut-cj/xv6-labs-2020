@@ -92,7 +92,7 @@ allocpid() {
 static struct proc*
 allocproc(void)
 {
-  struct proc *p;
+  struct proc *p;   // proc 添加了一个新参数 tracemask
 
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
@@ -126,6 +126,9 @@ found:
   memset(&p->context, 0, sizeof(p->context));
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
+
+  // 创建新进程时初始化为 0 
+  p->tracemask = 0;
 
   return p;
 }
@@ -297,6 +300,9 @@ fork(void)
 
   release(&np->lock);
 
+   // 子进程继承父进程的 tracemask
+   np->tracemask = p->tracemask;
+   
   return pid;
 }
 
@@ -691,5 +697,17 @@ procdump(void)
       state = "???";
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+  }
+}
+
+// 统计处于活动状态的进程
+void
+kprocnum(uint64* dst){
+  *dst = 0;
+  struct proc* p;
+  
+  for( p = proc; p < &proc[NPROC];p++){
+    if(p->state != UNUSED)
+      (*dst)++;
   }
 }
