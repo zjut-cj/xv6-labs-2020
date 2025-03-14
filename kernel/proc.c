@@ -270,6 +270,9 @@ fork(void)
     return -1;
   }
 
+  // 子进程继承父进程的 tracemask
+  np->tracemask = p->tracemask;
+
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -299,9 +302,6 @@ fork(void)
   np->state = RUNNABLE;
 
   release(&np->lock);
-
-   // 子进程继承父进程的 tracemask
-   np->tracemask = p->tracemask;
    
   return pid;
 }
