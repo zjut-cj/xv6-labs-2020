@@ -275,10 +275,15 @@ void
 freewalk(pagetable_t pagetable)
 {
   // there are 2^9 = 512 PTEs in a page table.
+  // 遍历整个页表
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
+    // PTE 用来判断页表项是否有效
+    // (pte & (PTE_R|PTE_W|PTE_X)) == 0 用来判断是否不在最后一层。
+    // 因为最后一层页表中页表项中 W位，R位，X位起码有一位会被设置为 1.
     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
       // this PTE points to a lower-level page table.
+      // 当遇到有效页表且不在最后一层时进行递归调用
       uint64 child = PTE2PA(pte);
       freewalk((pagetable_t)child);
       pagetable[i] = 0;
@@ -439,4 +444,33 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+// 打印页表内容
+void 
+pgtblprint(pagetable_t pagetable,int depth){
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    
+    // 判断页表是否有效
+    if(pte & PTE_V){
+      printf("..");
+      for(int j = 0; j < depth; j++){
+        printf(" ..");  // 根据题目输出格式在..前要加一个空格
+      }
+
+      uint64 child = PTE2PA(pte);   // this PTE points to a lower-level page table
+      printf("%d: pte %p pa %p\n",i,pte,child);
+      // 如果不是叶子节点,递归打印子节点
+      if((pte & (PTE_R | PTE_W | PTE_X)) == 0)
+        pgtblprint((pagetable_t)child, depth + 1);
+    }
+  }
+}
+
+void 
+vmprint(pagetable_t pagetable){
+  printf("page table %p\n",pagetable);
+  pgtblprint(pagetable,0);
 }
