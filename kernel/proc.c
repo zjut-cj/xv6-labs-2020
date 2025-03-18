@@ -121,6 +121,24 @@ found:
     return 0;
   }
 
+  // 初始化进程的内核页表,每个进程都会有自己独立的内核页表
+  p->kernelpt = proc_kpt_init();
+  if(p->kernelpt == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 因为每个进程都会有自己的独立页表，所以需要每个进程只访问自己的内核栈，所以要把内核栈映射到内核页表中
+  char *pa = kalloc();   // 分配一个物理页，作为新进程的内核栈使用
+  if(pa == 0)
+    panic("kalloc");
+  // 计算当前进程内核栈的虚拟地址
+  // p-proc 为进程 p 在进程数组 proc 中的索引, KSTACK() 宏将索引转换为对应的内核栈的虚拟地址
+  uint64 va = KSTACK((int) (p - proc));   
+  uvmmap(p->kernelpt, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);   // 在进程的页表中映射一个虚拟地址到一个物理地址
+  p->kstack = va;   // 初始化进程的内核栈
+
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -149,6 +167,18 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  // p->state = UNUSED;
+
+  // 进程结束后应该释放进程独享的页表以及内核栈，回收资源，否则会导致内核泄漏
+  // 这里释放资源需要按创建的顺序反着来，先释放进程的内核栈，再释放进程的内核页表
+  // 释放内核栈
+  uvmunmap(p->kernelpt, p->kstack, 1, 1);
+  p->kstack = 0;
+
+  // 释放内核页表
+  proc_freekernelpt(p->kernelpt);
+  p->kernelpt = 0;
+  
   p->state = UNUSED;
 }
 
@@ -193,6 +223,24 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
   uvmfree(pagetable, sz);
+}
+
+// 使用 proc_freepagetable 函数会同时释放掉内核进程必要的映射，导致内核崩溃
+// 递归释放内核页表中的所有映射，但是不释放其指向的物理页
+// 遍历整个内核页表，将所有有效的页表项清空为零
+void
+proc_freekernelpt(pagetable_t kernelpt){
+  for(int i = 0; i < 512; i++){
+    pte_t pte = kernelpt[i];
+    if((pte & PTE_V) ){
+      kernelpt[i] = 0;
+      if((pte & (PTE_R | PTE_W | PTE_X)) ==0){
+        uint64 child = PTE2PA(pte);
+        proc_freekernelpt((pagetable_t)child);
+      }      
+    }
+  }
+  kfree((void*) kernelpt);
 }
 
 // a user program that calls exec("/init")
@@ -473,7 +521,15 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        swtch(&c->context, &p->context);
+
+        // 进程进入内核态时还是会使用全局的内核进程页表
+        // 所以需要在调度器将 CPU 交给进程执行之前，加载进程的内核页表到 satp 寄存器，切换到进程对应的内核页表
+        proc_vminithart(p->kernelpt);   
+
+        swtch(&c->context, &p->context);  // 调度，执行进程
+
+
+        kvminithart();    // 进程结束需要切换回全局内核页表
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.

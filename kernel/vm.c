@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -52,7 +54,16 @@ kvminit()
 void
 kvminithart()
 {
+  // w_satp()用于设置 satp 寄存器，该寄存器是 RISC-V 中用来控制虚拟地址到物理地址映射的硬件寄存器
   w_satp(MAKE_SATP(kernel_pagetable));
+  // sfence_vma()是一个 RISC-V 指令，用来刷新虚拟内存地址映射
+  // 作用是刷新 TLB 快表的条目，确保修改后的页表映射生效，防止使用过期的页表信息
+  sfence_vma();
+}
+
+void
+proc_vminithart(pagetable_t kernelpgtbl){
+  w_satp(MAKE_SATP(kernelpgtbl));
   sfence_vma();
 }
 
@@ -114,17 +125,43 @@ walkaddr(pagetable_t pagetable, uint64 va)
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
+// 是对 xv6 的内核页表进行映射
 void
 kvmmap(uint64 va, uint64 pa, uint64 sz, int perm)
-{
+{ 
+  // mappages 函数目的是将虚拟地址 va 开始的地址范围映射到物理地址 pa 对应的地址范围,并应用相应的权限 perm
+  // 如果成功，通常返回 0 ; 如果失败，返回非 0 值
   if(mappages(kernel_pagetable, va, sz, pa, perm) != 0)
-    panic("kvmmap");
+    panic("kvmmap");    // 调用 panic 触发系统崩溃或异常处理
 }
 
-// translate a kernel virtual address to
-// a physical address. only needed for
-// addresses on the stack.
-// assumes va is page aligned.
+// 对进程的内核页表进行映射
+void
+uvmmap(pagetable_t pagetable, uint64 va, uint64 pa, uint64 sz, int perm){
+  if(mappages(pagetable, va, sz, pa, perm) != 0)
+    panic("uvmmap");  
+}
+
+// 为进程创建一个内核页表
+pagetable_t
+proc_kpt_init(){
+  pagetable_t kernelpt = uvmcreate();
+  if(kernelpt == 0)
+    return 0;
+
+  uvmmap(kernelpt, UART0, UART0, PGSIZE, PTE_R | PTE_W);
+  uvmmap(kernelpt, VIRTIO0, VIRTIO0, PGSIZE, PTE_R |PTE_W);
+  uvmmap(kernelpt, CLINT, CLINT, 0x10000, PTE_R | PTE_W);
+  uvmmap(kernelpt, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
+  uvmmap(kernelpt, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
+  uvmmap(kernelpt, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
+  uvmmap(kernelpt, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
+
+  return  kernelpt;
+}
+
+// translate a kernel virtual address to a physical address.
+// only needed for addresses on the stack.assumes va is page aligned.
 uint64
 kvmpa(uint64 va)
 {
@@ -132,7 +169,7 @@ kvmpa(uint64 va)
   pte_t *pte;
   uint64 pa;
   
-  pte = walk(kernel_pagetable, va, 0);
+  pte = walk(myproc()->kernelpt, va, 0);    // kernel_pagetable 改为 myproc()->kernelpt
   if(pte == 0)
     panic("kvmpa");
   if((*pte & PTE_V) == 0)
@@ -170,6 +207,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 // Remove npages of mappings starting from va. va must be
 // page-aligned. The mappings must exist.
 // Optionally free the physical memory.
+// 接触一段虚拟地址空间的映射,根据 do_free 参数选择是否释放物理内存
 void
 uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 {
@@ -278,7 +316,7 @@ freewalk(pagetable_t pagetable)
   // 遍历整个页表
   for(int i = 0; i < 512; i++){
     pte_t pte = pagetable[i];
-    // PTE 用来判断页表项是否有效
+    // PTE_V 用来判断页表项是否有效
     // (pte & (PTE_R|PTE_W|PTE_X)) == 0 用来判断是否不在最后一层。
     // 因为最后一层页表中页表项中 W位，R位，X位起码有一位会被设置为 1.
     if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
