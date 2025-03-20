@@ -38,6 +38,8 @@ sys_wait(void)
   return wait(p);
 }
 
+// sbrk 是一个用于内存管理的系统调用
+// 调整堆空间的大小
 uint64
 sys_sbrk(void)
 {
@@ -47,6 +49,7 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
+  // growproc 负责增加或缩小用户内存
   if(growproc(n) < 0)
     return -1;
   return addr;

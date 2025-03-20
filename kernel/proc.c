@@ -269,6 +269,10 @@ userinit(void)
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
+
+  // 同步程序内存到进程内核页表中
+  u2kvmcopy(p->pagetable, p->kernelpt, 0, p->sz);
+
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -291,12 +295,23 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
-    if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+    // 加上 PLIC 限制
+    if(PGROUNDUP(sz +n) >= PLIC ||(sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+
+    // 增量同步
+    if(u2kvmcopy(p->pagetable, p->kernelpt, p->sz, sz) != 0)
+      return -1;
+
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // 缩量同步
+    if(sz != p->sz){
+      uvmunmap(p->kernelpt,PGROUNDUP(sz), (PGROUNDUP(p->sz)-PGROUNDUP(sz)) / PGSIZE, 0);
+    }
   }
+  
   p->sz = sz;
   return 0;
 }
@@ -316,12 +331,18 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0 ){
     freeproc(np);
     release(&np->lock);
     return -1;
   }
   np->sz = p->sz;
+
+  if (u2kvmcopy(np->pagetable, np->kernelpt, 0, np->sz) != 0) {
+    freeproc(np);
+    release(&np->lock);
+    return -1;
+  }
 
   np->parent = p;
 

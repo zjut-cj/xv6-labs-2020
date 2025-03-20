@@ -31,7 +31,7 @@
 #define CLINT_MTIME (CLINT + 0xBFF8) // cycles since boot.
 
 // qemu puts programmable interrupt controller here.
-#define PLIC 0x0c000000L
+#define PLIC 0x0c000000L            // xv6 内核中用于映射程序内存的地址范围是 [0,PLIC)
 #define PLIC_PRIORITY (PLIC + 0x0)
 #define PLIC_PENDING (PLIC + 0x1000)
 #define PLIC_MENABLE(hart) (PLIC + 0x2000 + (hart)*0x100)

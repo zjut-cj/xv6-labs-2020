@@ -51,6 +51,8 @@ exec(char *path, char **argv)
     uint64 sz1;
     if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz)) == 0)
       goto bad;
+    // if(sz1 >= PLIC) // 防止程序内存大小超过 PLIC
+    //   goto bad;
     sz = sz1;
     if(ph.vaddr % PGSIZE != 0)
       goto bad;
@@ -115,6 +117,14 @@ exec(char *path, char **argv)
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp; // initial stack pointer
   proc_freepagetable(oldpagetable, oldsz);
+  
+  // 复制新的kernel page并刷新TLB
+  if (u2kvmcopy(p->pagetable, p->kernelpt, 0, p->sz) != 0) {
+    goto bad;
+  }
+  // 因为load进来了新的program, 刷新一下内存映射
+  w_satp(MAKE_SATP(p->kernelpt));
+  sfence_vma();
 
   // 打印第一个进程的页表
   if(p->pid == 1)
