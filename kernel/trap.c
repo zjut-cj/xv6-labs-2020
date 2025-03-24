@@ -32,7 +32,7 @@ trapinithart(void)
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
-//
+// usertrap 确定陷阱的原因，处理并返回
 void
 usertrap(void)
 {
@@ -50,9 +50,12 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
+  // 找出现在 usertrap 函数的原因
+  // 8 表示系统调用
   if(r_scause() == 8){
     // system call
 
+    // 是否有其他进程杀掉了当前进程
     if(p->killed)
       exit(-1);
 
