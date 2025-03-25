@@ -104,6 +104,9 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 
-  // 时钟相关
-  int alarm_internal
+  int alarm_period;   // 设置时钟触发的时间间隔
+  void (*alarm_handler)();      // 处理程序的地址，指针指向一个函数的地址
+  int ticks_since_last_alarm;   // 自上次时钟报警触发以来发生的滴答数
+  struct trapframe *alarmtrapframe;   // 用来暂存当前用户进程的寄存器状态,用于恢复原来的执行状态
+  int inalarm;        // 标志变量，表明当前进程是否正在执行处理程序，避免重复执行处理函数
 };

@@ -80,8 +80,26 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  // 设备编号 2 表示定时器
+  if(which_dev == 2){
+    // 又过去了一个时钟滴答
+    p->ticks_since_last_alarm += 1;
+
+    // 判断是否设置了时钟周期以及判断时钟滴答数是否等于时钟周期
+    // 这两个条件都满足了才说明时钟时间到了
+    // 后面还得判断下处理程序是否正在执行，满足三个条件才能执行处理程序
+    if (p->inalarm == 0 && p->alarm_period != 0 && p->ticks_since_last_alarm == p->alarm_period) {
+      // 修改当前进程 p 的陷阱帧 trapframe 的 epc 字段
+      // epc 保存的是从中断或异常返回到用户态时，CPU 将要执行的下一条指令的地址。
+      // 目的：跳转到用户定义的时钟处理程序
+      p->inalarm = 1;   // 避免重复进入
+      *p->alarmtrapframe = *p->trapframe;     // 暂存寄存器状态
+      p->trapframe->epc = (uint64)p->alarm_handler; 
+      p->ticks_since_last_alarm = 0;
+    }
+
+    yield();    // 作用：让当前进程放弃 CPU 的使用权，从而允许其他进程运行
+  }
 
   usertrapret();
 }
@@ -220,4 +238,3 @@ devintr()
     return 0;
   }
 }
-

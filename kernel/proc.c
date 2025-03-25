@@ -128,12 +128,25 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // 为陷阱帧 alarmframe 分配 1 页物理空间
+  if((p->alarmtrapframe = (struct trapframe*)kalloc()) == 0){
+    release(&p->lock);
+    return 0;
+  }
+
+  // 初始化
+  p->alarm_period = 0;
+  p->alarm_handler = 0;
+  p->ticks_since_last_alarm = 0;
+  p->inalarm = 0;
+
   return p;
 }
 
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
+// 释放进程中的资源
 static void
 freeproc(struct proc *p)
 {
@@ -151,6 +164,10 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  if(p->alarmtrapframe)
+    kfree((void*)p->alarmtrapframe);
+  p->alarmtrapframe = 0;
 }
 
 // Create a user page table for a given process,

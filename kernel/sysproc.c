@@ -58,6 +58,7 @@ sys_sleep(void)
   int n;
   uint ticks0;
 
+  // 加上回溯
   backtrace();
 
   if(argint(0, &n) < 0)
@@ -96,4 +97,36 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+// 记录参数
+uint64
+sys_sigalarm(void){
+  struct proc *my_proc = myproc();
+  int period;
+  uint64 p;
+  if(argint(0,&period) < 0)
+    return -1;
+  
+  if(argaddr(1,&p) < 0)
+    return -1;
+
+  my_proc->alarm_period = period;
+  my_proc->alarm_handler = (void(*)()) p;
+  my_proc->ticks_since_last_alarm = 0;
+
+  return 0;
+}
+
+// 获取原来寄存器的状态以恢复程序
+// 更新 inalarm 状态
+uint64
+sys_sigreturn(void){
+  struct proc* p = myproc();
+  if(p->inalarm){
+    p->inalarm = 0;
+    *p->trapframe = *p->alarmtrapframe;
+    p->ticks_since_last_alarm = 0;
+  }
+  return 0;
 }

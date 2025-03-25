@@ -134,14 +134,16 @@ printfinit(void)
 }
 
 // 遍历帧指针打印函数地址
-void backtrace(){
-  uint64 fp  = r_fp();  // 获取当前帧指针地址
+void backtrace()
+{
   printf("backtrace:\n");
 
+  uint64 cur_fp  = r_fp();  // 获取当前帧指针地址
+  uint64 page_bottom = PGROUNDDOWN(cur_fp);
   // 判断当前帧指针 fp 是否在有效的页范围内
-  while(PGROUNDDOWN(fp) != PGROUNDUP(fp)){
-    uint64 ra = *(uint64*)(fp-8);   // 当前调用层应该返回到的地址
+  while(page_bottom < cur_fp){
+    uint64 ra = *(uint64*)(cur_fp-8);   // 当前调用层应该返回到的地址
     printf("%p\n", ra);   // %p 用于输出内存地址
-    fp = *(uint64*)(fp-16);   // 指向上一层栈帧的 fp 开始地址
+    cur_fp = *(uint64*)(cur_fp-16);   // 指向上一层栈帧的 fp 开始地址
   }
 }
