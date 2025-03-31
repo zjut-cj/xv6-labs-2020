@@ -67,10 +67,20 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+  }else if((r_scause() == 13 || r_scause() == 15) && uvmcheckcowpage(r_stval())){
+    // 如果发生页面错误并且是写时复制机制导致的页面不可写，则执行写时复制
+    if(uvmcowcopy(r_stval()) == -1)
+      p->killed = 1;
+  }else {
+    uint64 fault_va = r_stval();   // 获取发生异常的虚拟地址
+    if((r_scause() == 13 || r_scause() == 15) && uvmshouldallocate(fault_va) != 0){
+      uvmlazyallocate(fault_va);
+    }else{
+      // 若不是缺页异常或者是在非惰性分配地址上发生缺页异常,则打印错误逼格杀死进程
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)
@@ -218,3 +228,40 @@ devintr()
   }
 }
 
+
+// 判断虚拟地址所在页是不是 cow 页
+int 
+uvmcheckcowpage(uint64 va){
+  pte_t* pte;
+  struct proc* p = myproc();
+
+  // 虚拟地址在进程内存范围内 && 虚拟地址在页表中有页表项 
+  // && 地址有效 && 地址所在页是cow页
+  return va < p->sz
+      && ((pte = walk(p->pagetable, va, 0)) != 0)
+      && (*pte & PTE_V)
+      && (*pte & PTE_COW);
+
+}
+
+int 
+uvmcowcopy(uint64 va){
+  pte_t* pte;
+  struct proc* p = myproc();
+  
+  // 获取虚拟地址的页表项
+  if((pte = walk(p->pagetable, va, 0)) == 0)
+    panic("uvmcowcopy:walk");
+
+  uint64 pa = PTE2PA(*pte);   // 获取映射的物理地址
+  uint64 new = (uint64)kcopy_n_deref((void*)pa);    // 获取新分配的物理地址
+  if(new == 0)  // 内存不足，返回 -1 终止进程
+    return -1;
+
+  uint64 flags = (PTE_FLAGS(*pte) | PTE_W) & ~PTE_COW;    // // 修改新映射的标志位，恢复写权限，清除 cow 标志
+  uvmunmap(p->pagetable, PGROUNDDOWN(va), 1, 0);    // 解除原先的映射
+  if(mappages(p->pagetable, va, 1, new, flags) == -1)   // 建立新映射
+    panic("uvmcowcopy：mappages");
+
+  return 0;
+}

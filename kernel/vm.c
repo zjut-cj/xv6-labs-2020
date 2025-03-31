@@ -5,6 +5,9 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
+
 
 /*
  * the kernel's page table.
@@ -180,10 +183,13 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
+    // 惰性分配刚开始并未实际分配物理内存,解除映射关系时应该直接跳过这部分内存,否则会导致系统崩溃
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
+      // panic("uvmunmap: walk");     // 遍历出现问题
+      continue;    
     if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+      // panic("uvmunmap: not mapped");   // 不存在映射
+      continue;
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
     if(do_free){
@@ -311,22 +317,38 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      // panic("uvmcopy: pte should exist");    // 惰性分配导致部分 pte 未分配,所以遇到不存在的 pte 就跳过
+      continue;
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      // panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+
+    // 将父进程中可写的都置为不可写,并设置写时复制位,表示是所在页是写时复制页
+    if(*pte & PTE_W){
+      *pte = (*pte & ~PTE_W) | PTE_COW; 
     }
+
+    flags = PTE_FLAGS(*pte);     // 获取当前父进程 pte 的标志位
+
+    // 将子进程映射到父进程的同一页物理页中
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0)
+      goto err;
+
+    krefpage((void*)pa);  // 物理页引用数 +1
+
+    // 这部分是原先完全复制内存的部分，需要去掉
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
+    //   kfree(mem);
+    //   goto err;
+    // }
   }
   return 0;
 
@@ -356,7 +378,16 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
 
+  // 遇到没有分配的虚拟地址就赶紧分配
+  if(uvmshouldallocate(dstva) != 0){
+    uvmlazyallocate(dstva);
+  }
+
   while(len > 0){
+    // 判断是否是写时复制页，是的话就进行写时复制
+    if(uvmcheckcowpage(dstva))
+      uvmcowcopy(dstva);
+
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
@@ -380,6 +411,11 @@ int
 copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
   uint64 n, va0, pa0;
+
+  // 遇到没有分配的虚拟地址要赶紧分配
+  if(uvmshouldallocate(srcva) != 0){
+    uvmlazyallocate(srcva);
+  }
 
   while(len > 0){
     va0 = PGROUNDDOWN(srcva);
@@ -440,3 +476,43 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+// 判断页面虚拟地址 va 是否需要惰性分配,是的话返回 1
+/*
+    va < p->sz   表示确保虚拟地址在进程的内存带下范围之内
+    r_sp()返回进程的栈指针,指向该进程栈区域的边界,即栈保护页
+    PGROUNDDOWN(va) != r_sp() 确保虚拟地址 va 不在栈的保护页区域
+    因为栈保护页是一个特定的内存区域,用来检测栈溢出等错误.该地址被认为是不合法的
+    (pte = walk(p->pagetable, va, 0) ==0 ) 是遍历进程页表 p->pagetable 查找虚拟地址 va 对应的页表项 PTE.返回0说明虚拟地址没有映射到任何物理页
+    (*pte & PTE_V) == 0) 表示页表项无效,表示该虚拟地址尚未分配物理内存
+
+  */
+int 
+uvmshouldallocate(uint64 va){
+  pte_t* pte;   // 指向页表项的指针,页表项用于描述虚拟地址与物理地址之间的映射关系
+  struct proc* p = myproc();  // 返回当前进程指针的函数, p 就是当前进程的结构体指针
+  return va < p->sz   
+      && PGROUNDDOWN(va) != r_sp()    
+      && ((pte = walk(p->pagetable, va, 0)) ==0  || (*pte & PTE_V) == 0);
+}
+
+// 分配物理内存
+void 
+uvmlazyallocate(uint64 va){
+  struct proc* p = myproc();
+  uint64 pa =  (uint64)kalloc();  // 分配物理地址
+
+  if(pa == 0){
+    printf("lazy alloc:out of memory\n");
+    p->killed = 1;
+  }else{
+    memset((void*)pa, 0, PGSIZE);   // 分配成功则将新分配的物理内存 pa 清零,确保该页面中的数据是空的
+    // 映射失败：1）打印错误信息  2）释放已分配的物理内存  3)标记进程为终止状态
+    if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, pa, PTE_R | PTE_W | PTE_X | PTE_U) != 0){
+      printf("lazr alloc: failed to map page\n");
+      kfree((void*)pa);
+      p->killed = 1;
+    }
+  }
+}
+

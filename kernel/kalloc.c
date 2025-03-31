@@ -1,13 +1,21 @@
 // Physical memory allocator, for user processes,
 // kernel stacks, page-table pages,
 // and pipe buffers. Allocates whole 4096-byte pages.
-
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+
+#define PA2PGREF_ID(p) (((p)-KERNBASE)/PGSIZE)   // 根据物理地址获取物理页 id
+#define PGREF_MAX_ENTRIES PA2PGREF_ID(PHYSTOP)    // 计算最大物理页数量
+
+int pageref[PGREF_MAX_ENTRIES];   // 定义物理页数组计算引用数量
+struct spinlock pgreflock;
+
+#define PA2PGREF(p) pageref[PA2PGREF_ID((uint64)(p))]   // 获取某个地址对应物理页的引用数
+
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -27,6 +35,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&pgreflock,"pgref");   // 初始化锁
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,15 +60,20 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  // 当页面引用数 <=0 时才释放物理内存
+  acquire(&pgreflock);
+  if(--PA2PGREF(pa) <= 0){
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
 
-  r = (struct run*)pa;
+    r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+    acquire(&kmem.lock);
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    release(&kmem.lock);
+  }
+  release(&pgreflock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -76,7 +90,46 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r){
     memset((char*)r, 5, PGSIZE); // fill with junk
+    PA2PGREF(r) = 1;      // 将新分配的物理页引用数设置为 1
+  }
+    
   return (void*)r;
+}
+
+// 物理引用数 +1
+void
+krefpage(void* pa){
+  acquire(&pgreflock);
+  PA2PGREF(pa)++;
+  release(&pgreflock);
+}
+
+// 写时复制一个新的物理地址返回
+// 如果该物理页的引用数 >1,，则引用数 -1，并分配一个新的物理页返回
+// 如果物理页 <=1 ，则无需操作直接返回该物理页
+void*
+kcopy_n_deref(void* pa){
+  acquire(&pgreflock);
+
+  // 当前物理页引用为 1 时，不需要分配新的物理页
+  if(PA2PGREF(pa) <= 1){
+    release(&pgreflock);
+    return pa;
+  }
+
+  // 当前物理页引用不为 1，分配新的物理页
+  uint64 newpa = (uint64)kalloc();
+  if(newpa == 0){   // 物理内存不够
+    release(&pgreflock);
+    return 0;
+  }
+  memmove((void*)newpa, (void*)pa, PGSIZE);  // 将原来物理页中的内容复制到新页中
+
+  // 更新原来的物理页引用数
+  PA2PGREF(pa)--;
+
+  release(&pgreflock);
+  return (void*)newpa;
 }

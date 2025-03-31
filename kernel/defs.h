@@ -63,6 +63,8 @@ void            ramdiskrw(struct buf*);
 void*           kalloc(void);
 void            kfree(void *);
 void            kinit(void);
+void            krefpage(void*);
+void*           kcopy_n_deref(void*);
 
 // log.c
 void            initlog(int, struct superblock*);
@@ -145,6 +147,8 @@ void            trapinit(void);
 void            trapinithart(void);
 extern struct spinlock tickslock;
 void            usertrapret(void);
+int             uvmcheckcowpage(uint64);
+int             uvmcowcopy(uint64);
 
 // uart.c
 void            uartinit(void);
@@ -171,6 +175,9 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+pte_t*         walk(pagetable_t, uint64, int);
+int             uvmshouldallocate(uint64);      // 判断是否需要分配物理内存
+void            uvmlazyallocate(uint64);        // 分配物理内存
 
 // plic.c
 void            plicinit(void);
