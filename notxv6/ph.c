@@ -8,13 +8,14 @@
 #define NBUCKET 5
 #define NKEYS 100000
 
-pthread_mutex_t lock;
+
 struct entry {
   int key;
   int value;
   struct entry *next;
 };
 struct entry *table[NBUCKET];
+pthread_mutex_t lock[NBUCKET];
 int keys[NKEYS];
 int nthread = 1;
 
@@ -39,10 +40,8 @@ insert(int key, int value, struct entry **p, struct entry *n)
 static 
 void put(int key, int value)
 { 
-  // 上锁
-  pthread_mutex_lock(&lock);
-
   int i = key % NBUCKET;
+  pthread_mutex_lock(&lock[i]);
 
   // is the key already present?
   struct entry *e = 0;
@@ -59,7 +58,7 @@ void put(int key, int value)
   }
 
   // 释放锁
-  pthread_mutex_unlock(&lock);
+  pthread_mutex_unlock(&lock[i]);
 }
 
 static struct entry*
@@ -109,7 +108,6 @@ main(int argc, char *argv[])
   pthread_t *tha;
   void *value;
   double t1, t0;
-  pthread_mutex_init(&lock,NULL);
 
   if (argc < 2) {
     fprintf(stderr, "Usage: %s nthreads\n", argv[0]);
@@ -121,6 +119,11 @@ main(int argc, char *argv[])
   assert(NKEYS % nthread == 0);
   for (int i = 0; i < NKEYS; i++) {
     keys[i] = random();
+  }
+  
+  // 执行 put 前初始化锁
+  for (int i = 0; i < NBUCKET; i++){
+    pthread_mutex_init(&lock[i], NULL);
   }
 
   //
