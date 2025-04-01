@@ -10,15 +10,34 @@
 #define STACK_SIZE  8192
 #define MAX_THREAD  4
 
+struct thread_context{
+  uint64 ra;    // 返回地址寄存器
+  uint64 sp;    // 堆栈指针,指向当前线程的栈
+
+  uint64 s0;
+  uint64 s1;
+  uint64 s2;
+  uint64 s3;
+  uint64 s4;
+  uint64 s5;
+  uint64 s6;
+  uint64 s7;
+  uint64 s8;
+  uint64 s9;
+  uint64 s10;
+  uint64 s11;
+};
 
 struct thread {
   char       stack[STACK_SIZE]; /* the thread's stack */
   int        state;             /* FREE, RUNNING, RUNNABLE */
-
+  struct thread_context thread_context;   // 线程结构体中添加上下文切换的结构体
 };
 struct thread all_thread[MAX_THREAD];
 struct thread *current_thread;
-extern void thread_switch(uint64, uint64);
+
+// 修改线程切换函数传递的参数
+extern void thread_switch(struct thread_context* old, struct thread_context* new);
               
 void 
 thread_init(void)
@@ -41,6 +60,8 @@ thread_schedule(void)
   next_thread = 0;
   t = current_thread + 1;
   for(int i = 0; i < MAX_THREAD; i++){
+    // 确保线程 t 在遍历线程组的时候超出数组的范围时重置返回线程数组开头
+    // 实现"环形调用"，从头开始重新遍历
     if(t >= all_thread + MAX_THREAD)
       t = all_thread;
     if(t->state == RUNNABLE) {
@@ -63,6 +84,7 @@ thread_schedule(void)
      * Invoke thread_switch to switch from t to next_thread:
      * thread_switch(??, ??);
      */
+    thread_switch(&t->thread_context, &current_thread->thread_context);
   } else
     next_thread = 0;
 }
@@ -77,6 +99,12 @@ thread_create(void (*func)())
   }
   t->state = RUNNABLE;
   // YOUR CODE HERE
+
+  // 返回地址,thread_switch 线程切换执行完返回到 ra,设置成线程函数 func,就可以切换后执行 func
+  t->thread_context.ra = (uint64) func;
+  
+  // 堆栈指针,因为栈的生长是从高地址到低地址生长的,所以 sp 要设置成最高地址
+  t->thread_context.sp = (uint64)&t->stack + (STACK_SIZE-1);
 }
 
 void 
@@ -95,8 +123,9 @@ thread_a(void)
   int i;
   printf("thread_a started\n");
   a_started = 1;
-  while(b_started == 0 || c_started == 0)
-    thread_yield();
+  // 只要其他两个线程还没启动就等待都启动后再继续执行
+  while(b_started == 0 || c_started == 0)   
+    thread_yield();   // 让出当前线程执行权，允许操作系统调度其他线程执行
   
   for (i = 0; i < 100; i++) {
     printf("thread_a %d\n", i);
