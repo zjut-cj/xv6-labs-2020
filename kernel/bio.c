@@ -26,7 +26,7 @@
 // 哈希表的桶号索引.设置个数为质数的桶数可以降低哈希冲突
 #define NBUFMAP_BUCKET 13
 // 哈希桶索引计算 (key 值)
-#define BUFMAP_HASH(dev, blockno) ((((dev) << 27) | (blockno)) % NBUFMAP_BUCKET)
+#define BUFMAP_HASH(dev, blockno) ((((dev)<<27) | (blockno)) % NBUFMAP_BUCKET)
 
 struct {
   // struct spinlock lock;
@@ -53,7 +53,7 @@ binit(void)
   // 初始化缓冲区块，初始时均连接到桶号索引为 0 的哈希桶中
   for (int i = 0; i < NBUF; i++)
   {
-    struct buf *b = &bcache.buf[i];
+    struct buf* b = &bcache.buf[i];
     initsleeplock(&b->lock,"buffer");
     b->lastuse = 0;
     b->refcnt = 0;
@@ -62,6 +62,7 @@ binit(void)
     b->next = bcache.bufmap[0].next;
     bcache.bufmap[0].next = b;
   }
+  initlock(&bcache.eviction_lock, "bcache_eviction");
 }
 
 // Look through buffer cache for block on device dev.
@@ -75,14 +76,14 @@ bget(uint dev, uint blockno)
   struct buf *b;
 
   // 哈希计算获取桶号
-  uint key = BUFMAP_HASH(dev,blockno);
+  uint key = BUFMAP_HASH(dev, blockno);
 
   // 哈希桶上锁
   acquire(&bcache.bufmap_locks[key]);
 
   // 查找缓冲区块
   // 若在缓冲区中
-  for(b = bcache.bufmap[key].next;b;b = b->next){
+  for(b = bcache.bufmap[key].next; b; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt ++;
       release(&bcache.bufmap_locks[key]);
@@ -93,14 +94,17 @@ bget(uint dev, uint blockno)
 
   // 若缓冲区未命中,则先释放哈希桶锁,再获取驱逐锁
   release(&bcache.bufmap_locks[key]);
-  acquire(&bcache.eviction_lock);
+  acquire(&bcache.eviction_lock);     // 查找替换的时候上锁
 
   // 在释放桶锁到获取驱逐锁的间隙可能会有别的线程创建了需要的缓冲区块,所以要再检查一次,避免重复创建缓冲区块
   for(b = bcache.bufmap[key].next; b; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
+      acquire(&bcache.bufmap_locks[key]);
       b->refcnt++;
       release(&bcache.bufmap_locks[key]);
+      release(&bcache.eviction_lock);
       acquiresleep(&b->lock);
+      return b;
     }
   }
 
@@ -115,8 +119,8 @@ bget(uint dev, uint blockno)
     int newfound = 0;   // 是否在当前桶找到新的可以替换的缓冲区
     
     // 遍历当前桶查找可以替换的缓冲区
-    for(b = &bcache.bufmap[i]; b; b = b->next){
-      if(b->next->refcnt == 0 && (!before_least || b->next->lastuse < before_least->lastuse)){
+    for(b = &bcache.bufmap[i]; b->next ; b = b->next){
+      if(b->next->refcnt == 0 && (!before_least || b->next->lastuse < before_least->next->lastuse)){
         before_least = b;
         newfound = 1;
       }

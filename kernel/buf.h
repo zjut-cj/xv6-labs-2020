@@ -9,6 +9,6 @@ struct buf {
   struct buf *next;
   uchar data[BSIZE];
 
-  uint lastuse;   // 该缓冲区的最后使用时间（通常用于实现 LRU 策略）
+  uint lastuse;   // 该缓冲区的最后使用时间（通常用于实现 LRU 策略）,越大说明是最近越多使用的
 };
 
