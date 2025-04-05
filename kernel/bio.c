@@ -25,7 +25,7 @@
 
 // 哈希表的桶号索引.设置个数为质数的桶数可以降低哈希冲突
 #define NBUFMAP_BUCKET 13
-// 哈希桶索引计算 (key 值)
+// 由哈希公式看映射到哪一个哈希桶
 #define BUFMAP_HASH(dev, blockno) ((((dev)<<27) | (blockno)) % NBUFMAP_BUCKET)
 
 struct {
