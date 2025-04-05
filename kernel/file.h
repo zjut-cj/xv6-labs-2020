@@ -26,7 +26,7 @@ struct inode {
   short minor;
   short nlink;
   uint size;
-  uint addrs[NDIRECT+1];
+  uint addrs[NDIRECT+2];    // 修改内存中结构体,从直接快中让一个位置出来给二级间接块
 };
 
 // map major device number to device functions.
