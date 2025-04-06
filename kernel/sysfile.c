@@ -297,18 +297,45 @@ sys_open(void)
 
   begin_op();
 
-  if(omode & O_CREATE){
+  
+  if(omode & O_CREATE){   // 创建文件
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
     }
-  } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+  } else {  // 查找软链接的目标文件内容
+    int symlink_depth = 0;
+    while(1){
+      if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+
+      // 加锁并检查是否是软链接
+      ilock(ip);
+      if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){   // (omode & O_NOFOLLOW) == 0 表示继续跟随链接
+        if(++symlink_depth > 10){
+          iunlockput(ip);
+          end_op();
+          return -1;
+        }
+        // 读取符号链接文件失败，没能获取它所指向的目标路径，则要释放 inode ，退出文件打开操作
+        // 如果有的话就一直读
+        if(readi(ip, 0,(uint64)path, 0, MAXPATH) < 0){
+            iunlockput(ip);
+            end_op();
+            return -1;
+        }
+
+        iunlockput(ip);
+
+      }else{    // 不跟随了就退出
+        break;
+      }     
     }
-    ilock(ip);
+    
+    // 如果打开的是一个目录并且不是只读打开，就拒绝访问
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -482,5 +509,37 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_symlink(void)
+{
+  struct inode* ip;     // 指向新创建的 symlink 文件的 inode
+  char target[MAXPATH], path[MAXPATH];     // 最大字节数为 MAXPATH
+
+
+  // 从第 0 个参数获取目标路径 target      从第 1 个参数获取符号链接自身的路径 path
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+
+  // 创建一个新的 inode，类型为 T_SYMLINK,指向 path 文件
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  // 将 target 路径写入 inode 中
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) < 0){
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  
   return 0;
 }
