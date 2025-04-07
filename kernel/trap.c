@@ -67,7 +67,12 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  }else if(r_scause() == 13 || r_scause() == 15){
+    uint64 va = r_stval();
+    // 如果访问的内核空间地址不属于任何 vma，应该让当前用户进程崩溃，而不是panic让内核自己挂掉
+    if(vmaalloc(va) == 0)
+      p->killed = 1;    // 杀掉当前进程
+  }else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;

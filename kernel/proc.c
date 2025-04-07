@@ -134,6 +134,10 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  // 初始化时需要清空 vmas 数组
+  for(int i = 0; i < NVMA; i++)
+    p->vmas[i].valid = 0;
+
   return p;
 }
 
@@ -146,8 +150,16 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+
+  // 释放进程前清空 vma 数组
+  for(int i = 0; i < NVMA; i++){
+    struct vma* v = &p->vmas[i];
+    vmaunmap(p->pagetable, v->vastart, v->sz, v);
+  }
+
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -295,6 +307,15 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  // 将父进程的 vmas 复制到子进程中,但是实际内存页和页表 pte 不会被复制
+  for(int i = 0; i < NVMA; i++){
+    struct vma* v = &p->vmas[i];
+    if(v->valid){
+      np->vmas[i] = *v;
+      filedup(v->f);
+    }
+  }
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
